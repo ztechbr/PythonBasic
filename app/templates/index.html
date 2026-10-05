@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GW-BASIC Python Academic Port</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="layout">
+  <section class="terminal-card">
+    <header>
+      <div>
+        <h1>GW-BASIC Python Port</h1>
+        <p>Portabilidade acadêmica ASM 8086 -> Python 3 / Flask MVC</p>
+      </div>
+      <button id="reset">NEW</button>
+    </header>
+    <pre id="screen">Ok</pre>
+    <form id="form" autocomplete="off">
+      <span class="prompt">&gt;</span>
+      <input id="command" autofocus spellcheck="false" aria-label="Comando BASIC">
+    </form>
+  </section>
+  <aside>
+    <h2>Estado</h2>
+    <pre id="vars">{}</pre>
+    <h2>Gráficos</h2>
+    <svg id="graphics" viewBox="0 0 640 400" role="img" aria-label="Saída gráfica BASIC"></svg>
+  </aside>
+</main>
+<script>
+const screen=document.getElementById('screen');
+const vars=document.getElementById('vars');
+const input=document.getElementById('command');
+const svg=document.getElementById('graphics');
+let transcript='Ok\n';
+
+function renderGraphics(commands){
+  svg.innerHTML='';
+  for(const c of commands||[]){
+    let el=null;
+    if(c.op==='PSET' || c.op==='PRESET'){
+      el=document.createElementNS('http://www.w3.org/2000/svg','circle');
+      el.setAttribute('cx',c.x); el.setAttribute('cy',c.y); el.setAttribute('r',2);
+    } else if(c.op==='LINE' && c.points && c.points.length>1){
+      el=document.createElementNS('http://www.w3.org/2000/svg','line');
+      el.setAttribute('x1',c.points[0][0]); el.setAttribute('y1',c.points[0][1]);
+      el.setAttribute('x2',c.points[1][0]); el.setAttribute('y2',c.points[1][1]);
+    } else if(c.op==='CIRCLE'){
+      el=document.createElementNS('http://www.w3.org/2000/svg','circle');
+      el.setAttribute('cx',c.x); el.setAttribute('cy',c.y); el.setAttribute('r',c.radius);
+      el.setAttribute('fill','none');
+    }
+    if(el){ el.setAttribute('stroke','currentColor'); el.setAttribute('fill',el.getAttribute('fill')||'currentColor'); svg.appendChild(el); }
+  }
+}
+
+document.getElementById('form').addEventListener('submit',async e=>{
+  e.preventDefault(); const command=input.value; input.value='';
+  transcript += '> '+command+'\n';
+  const r=await fetch('/api/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command})});
+  const d=await r.json();
+  if(d.output) transcript += d.output;
+  if(d.status==='waiting_input' && d.prompt) transcript += d.prompt;
+  screen.textContent=transcript; screen.scrollTop=screen.scrollHeight;
+  vars.textContent=JSON.stringify(d.variables||{},null,2); renderGraphics(d.graphics);
+});
+
+document.getElementById('reset').addEventListener('click',async()=>{
+  await fetch('/api/reset',{method:'POST'}); transcript='Ok\n'; screen.textContent=transcript; vars.textContent='{}'; svg.innerHTML=''; input.focus();
+});
+</script>
+</body>
+</html>

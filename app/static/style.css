@@ -1,0 +1,15 @@
+:root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #111; color: #eee; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; min-height: 100vh; }
+.terminal-card { padding: 24px; border-right: 1px solid #333; }
+header { display:flex; justify-content:space-between; align-items:start; gap:16px; }
+h1 { margin:0 0 6px; font-size:20px; } p { margin:0 0 18px; color:#aaa; }
+#screen { min-height: 65vh; max-height: 72vh; overflow:auto; border:1px solid #333; padding:16px; background:#050505; white-space:pre-wrap; }
+form { display:flex; gap:8px; align-items:center; border:1px solid #333; border-top:0; padding:12px; background:#090909; }
+input { flex:1; border:0; outline:0; background:transparent; color:inherit; font:inherit; }
+button { background:#222; color:#eee; border:1px solid #444; padding:8px 12px; cursor:pointer; }
+aside { padding:24px; overflow:auto; } aside h2 { font-size:14px; color:#bbb; margin-top:0; }
+#vars { font-size:12px; white-space:pre-wrap; }
+#graphics { width:100%; background:#050505; border:1px solid #333; color:#eee; }
+@media (max-width: 900px) { .layout { grid-template-columns:1fr; } aside { display:none; } .terminal-card { border-right:0; } }
