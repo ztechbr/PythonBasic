@@ -13,3 +13,9 @@ aside { padding:24px; overflow:auto; } aside h2 { font-size:14px; color:#bbb; ma
 #vars { font-size:12px; white-space:pre-wrap; }
 #graphics { width:100%; background:#050505; border:1px solid #333; color:#eee; }
 @media (max-width: 900px) { .layout { grid-template-columns:1fr; } aside { display:none; } .terminal-card { border-right:0; } }
+
+.cassette-panel { margin-bottom:18px; }
+.cassette-panel input[type=file] { width:100%; border:1px solid #333; padding:8px; margin-bottom:8px; }
+.cassette-actions { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+.cassette-actions a { color:#ddd; border:1px solid #444; padding:8px 12px; text-decoration:none; }
+#cassette-status { font-size:11px; white-space:pre-wrap; border:1px solid #333; background:#050505; padding:8px; min-height:48px; }

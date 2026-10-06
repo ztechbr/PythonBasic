@@ -130,7 +130,7 @@ class ExpressionParser:
                         raise BasicError(str(e)) from e
                 # Machine-facing functions become lookups in explicit runtime maps.
                 if name == 'PEEK' and len(args) == 1:
-                    return self.state.memory.get(int(args[0]), 0)
+                    return self.state.memory.get(self.state.linear_address(int(args[0])), 0)
                 if name == 'INP' and len(args) == 1:
                     return self.state.io_ports.get(int(args[0]), 0)
                 if name == 'POS':

@@ -121,6 +121,10 @@ class RuntimeState:
     common_variables: set[str] = field(default_factory=set)
     last_error: Optional[str] = None
     random_seeded: bool = False
+    # DEF SEG is the 8086 segment used by PEEK/POKE/BLOAD/BSAVE.  Memory keys
+    # are 20-bit physical addresses so the Python model preserves segment:offset
+    # semantics instead of pretending that BASIC offsets are flat Python indexes.
+    def_seg: int = 0
     memory: dict[int, int] = field(default_factory=dict)
     io_ports: dict[int, int] = field(default_factory=dict)
     graphics_commands: list[dict[str, Any]] = field(default_factory=list)
@@ -155,6 +159,15 @@ class RuntimeState:
     def get_var(self, name: str) -> Any:
         key = self.normalize_var(name)
         return self.variables.get(key, self.default_value(key))
+
+    def linear_address(self, offset: int, segment: int | None = None) -> int:
+        """Translate 8086 segment:offset to the original 20-bit address space.
+
+        GWEVAL/GIO86 use SAVSEG for PEEK, POKE, BLOAD and BSAVE.  Real-mode
+        address formation is ``segment * 16 + offset`` with 20-bit wraparound.
+        """
+        seg = self.def_seg if segment is None else int(segment)
+        return (((seg & 0xFFFF) << 4) + (int(offset) & 0xFFFF)) & 0xFFFFF
 
     def set_var(self, name: str, value: Any) -> None:
         key = self.normalize_var(name)

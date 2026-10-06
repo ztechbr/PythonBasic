@@ -15,6 +15,8 @@ app/
   services/
     interpreter.py       dispatcher e execução dos statements
     expression.py        lexer e parser de expressões
+    legacy_basic.py      codec tokenizado/ASCII/protegido legado
+    cassette.py          CAS1: WAV/MP3, FSK IBM PC e CRC
   asm_ports/             35 módulos, um por ASM original
   templates/             terminal web
   static/                CSS sem Node/React
@@ -23,6 +25,7 @@ reference/                headers e licença original
 docs/ASM_ANALYSIS.md      análise dos 35 ASM
 docs/ASM_ROUTINE_INDEX.json índice de PUBLIC/EXTRN/labels
 docs/PORTING_GUIDE.md     método de tradução
+docs/CASSETTE_AUDIO.md    compatibilidade CAS1: em WAV/MP3
 examples/                 programas BASIC de teste
 ```
 
@@ -70,15 +73,42 @@ RUN
 RUN
 ```
 
+### Cassete CAS1 em WAV
+
+Por padrão, `CAS1:` usa `data/cassette.wav`:
+
+```basic
+10 PRINT "HELLO CASSETTE"
+SAVE "CAS1:DEMO"
+NEW
+LOAD "CAS1:DEMO"
+RUN
+```
+
+Para criar diretamente uma imagem MP3 no servidor:
+
+```basic
+MOUNT CAS1,"minhafita.mp3"
+SAVE "CAS1:DEMO"
+```
+
+Para material histórico, prefira WAV. O diretório `examples/` contém `cassette_demo.wav`, já codificado no formato IBM PC CAS1, e `cassette_demo.bas`.
+
 ## Cobertura funcional atual
 
-Implementados ou cobertos de forma útil: linhas numeradas, RUN, LIST, LLIST, NEW, CLEAR, DELETE, LET, atribuição implícita, PRINT, PRINT USING, WRITE, INPUT, LINE INPUT, IF/THEN/ELSE, GOTO, GOSUB, RETURN, ON GOTO/GOSUB, FOR/NEXT, WHILE/WEND, DATA/READ/RESTORE, DIM, arrays, ERASE, SWAP, TRON/TROFF, RANDOMIZE, POKE/PEEK, OUT/INP, OPEN/CLOSE, INPUT#/PRINT#/WRITE#, SAVE/LOAD/MERGE, FILES, KILL, NAME, CLS, WIDTH, LOCATE, PSET, PRESET, LINE, CIRCLE, PAINT e callback CALL controlado.
+Implementados ou cobertos de forma útil: linhas numeradas, RUN, LIST, LLIST, NEW, CLEAR, DELETE, LET, atribuição implícita, PRINT, PRINT USING, WRITE, INPUT, LINE INPUT, IF/THEN/ELSE, GOTO, GOSUB, RETURN, ON GOTO/GOSUB, FOR/NEXT, WHILE/WEND, DATA/READ/RESTORE, DIM, arrays, ERASE, SWAP, TRON/TROFF, RANDOMIZE, POKE/PEEK, OUT/INP, OPEN/CLOSE, INPUT#/PRINT#/WRITE#, SAVE/LOAD/MERGE, BLOAD/BSAVE, DEF SEG, CAS1: em WAV/MP3, FILES, KILL, NAME, CLS, WIDTH, LOCATE, PSET, PRESET, LINE, CIRCLE, PAINT e callback CALL controlado.
 
 Funções matemáticas e de string incluem ABS, ATN, COS, EXP, LOG, SIN, SQR, TAN, SGN, INT, FIX, CINT, CSNG, CDBL, RND, LEN, LEFT$, RIGHT$, MID$, CHR$, ASC, STR$, VAL, STRING$, SPACE$, HEX$, OCT$ e INSTR.
 
+## Cassete IBM PC / CAS1:
+
+A porta agora implementa o formato de fita do IBM PC usado pela família Cassette BASIC/BASICA: FSK baseado nos períodos do PIT, leader `FF`, sync `16h`, blocos de 256 bytes, CRC-16/CCITT, cabeçalhos BASIC, programas tokenizados/ASCII/protegidos e imagens `BSAVE`. A interface Flask permite montar um WAV ou MP3 antigo e usar `LOAD "CAS1:NOME"` ou `BLOAD "CAS1:NOME"`. Leia `docs/CASSETTE_AUDIO.md`.
+
+WAV é o formato recomendado e sem perdas. MP3 é suportado com `ffmpeg`, mas não é indicado como cópia arquivística porque a compressão com perdas pode alterar transições de uma gravação antiga marginal.
+
 ## Compatibilidade deliberadamente não byte a byte
 
-O projeto não tenta reproduzir Microsoft Binary Format, layout exato de descritores de string, BIOS, memória segmentada, UART, cassete, BLOAD/BSAVE de RAM bruta ou execução de endereços 8086. Esses itens exigiriam um emulador de máquina e reduziriam o valor didático da porta Python.
+O projeto continua sendo uma porta semântica, não um emulador integral do 8086. O CAS1 e a memória segmentada necessária a `PEEK`/`POKE`/`BLOAD`/`BSAVE` são modelados explicitamente, mas não se tenta executar endereços 8086 arbitrários nem reproduzir todos os detalhes internos de descritores de string ou hardware não relacionado à fita.
 
 ## Estudo por arquivo ASM
 

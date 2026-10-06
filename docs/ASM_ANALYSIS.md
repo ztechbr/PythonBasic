@@ -249,13 +249,13 @@ Este documento foi gerado a partir dos fontes originais incluídos em `reference
 **Papel:** Cassete.  
 **Título original:** GIOCAS - Cassette Machine Independent Device Driver Code  
 **Tamanho:** 640 bytes, 33 linhas, 1 labels internos, 1 referências externas.  
-**Estado da porta:** Documentado.
+**Estado da porta:** Funcional via compatibilidade CAS1:/IBM PC BIOS.
 
-**Leitura do ASM:** Hook do motor e dispositivo de fita.
+**Leitura do ASM:** Este `GIOCAS.ASM` é apenas o hook `MOTOR` e, nesta variante do fonte, salta para `Device unavailable`. A modulação física não está neste ASM, pois no IBM PC 5150 era fornecida pelos serviços de cassete do BIOS.
 
 **Entradas públicas principais:** `MOTOR`.
 
-**Tradução Python:** Mantido como abstração documentada, sem hardware físico.
+**Tradução Python:** `app/services/cassette.py` implementa o contrato externo necessário: FSK IBM PC, leader/sync, blocos de 256 bytes, CRC, cabeçalho BASIC e WAV/MP3. `LOAD`, `SAVE`, `BLOAD` e `BSAVE` usam `CAS1:` no interpretador.
 
 **Onde estudar a porta:** `app/asm_ports/giocas.py`. O fonte original permanece em `reference/asm/GIOCAS.ASM`.
 
@@ -646,4 +646,4 @@ Este documento foi gerado a partir dos fontes originais incluídos em `reference
 
 ## Limites deliberados
 
-A versão atual é uma porta acadêmica executável, não uma reprodução binária do GW-BASIC. Os pontos que exigiriam emulação completa de hardware ou compatibilidade byte a byte, como Microsoft Binary Format, BIOS, UART, cassette, BLOAD/BSAVE de memória bruta, VARPTR/DEF SEG e chamada de endereços 8086, foram convertidos em abstrações seguras e legíveis. O índice completo de labels, PUBLIC, EXTRN, INCLUDE e números de linha está em `docs/ASM_ROUTINE_INDEX.json`.
+A versão atual é uma porta acadêmica executável, não uma reprodução binária do GW-BASIC. Os pontos que exigiriam emulação completa de hardware ou compatibilidade byte a byte, como execução de BIOS arbitrário, UART completa, VARPTR real e chamada de endereços 8086, foram convertidos em abstrações seguras e legíveis. O subsistema de cassete CAS1:, a memória segmentada usada por DEF SEG/PEEK/POKE e BLOAD/BSAVE foram implementados explicitamente; detalhes estão em `docs/CASSETTE_AUDIO.md`. O índice completo de labels, PUBLIC, EXTRN, INCLUDE e números de linha está em `docs/ASM_ROUTINE_INDEX.json`.

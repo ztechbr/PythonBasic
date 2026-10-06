@@ -25,6 +25,15 @@
   <aside>
     <h2>Estado</h2>
     <pre id="vars">{}</pre>
+    <h2>Cassete CAS1:</h2>
+    <div class="cassette-panel">
+      <input id="cassette-file" type="file" accept="audio/wav,audio/x-wav,audio/mpeg,.wav,.mp3">
+      <div class="cassette-actions">
+        <button id="mount-cassette" type="button">Montar WAV/MP3</button>
+        <a id="download-cassette" href="/api/cassette/download">Baixar fita</a>
+      </div>
+      <pre id="cassette-status">Nenhuma fita analisada.</pre>
+    </div>
     <h2>Gráficos</h2>
     <svg id="graphics" viewBox="0 0 640 400" role="img" aria-label="Saída gráfica BASIC"></svg>
   </aside>
@@ -34,6 +43,8 @@ const screen=document.getElementById('screen');
 const vars=document.getElementById('vars');
 const input=document.getElementById('command');
 const svg=document.getElementById('graphics');
+const cassetteFile=document.getElementById('cassette-file');
+const cassetteStatus=document.getElementById('cassette-status');
 let transcript='Ok\n';
 
 function renderGraphics(commands){
@@ -66,6 +77,29 @@ document.getElementById('form').addEventListener('submit',async e=>{
   screen.textContent=transcript; screen.scrollTop=screen.scrollHeight;
   vars.textContent=JSON.stringify(d.variables||{},null,2); renderGraphics(d.graphics);
 });
+
+
+
+function renderCassetteStatus(d){
+  const lines=[];
+  if(d.mounted) lines.push('CAS1: '+d.mounted);
+  if(d.error) lines.push('Erro: '+d.error);
+  for(const f of d.files||[]){
+    const addr=f.type==='M' ? ` seg=${f.segment.toString(16).toUpperCase()} off=${f.offset.toString(16).toUpperCase()}` : '';
+    lines.push(`${f.name}.${f.type} ${f.bytes} bytes CRC=${f.crc_ok?'OK':'ERRO'}${addr}`);
+  }
+  cassetteStatus.textContent=lines.join('\n') || 'Fita montada, sem arquivos BASIC indexados.';
+}
+
+document.getElementById('mount-cassette').addEventListener('click',async()=>{
+  if(!cassetteFile.files.length){ cassetteStatus.textContent='Selecione um WAV ou MP3.'; return; }
+  const body=new FormData(); body.append('cassette',cassetteFile.files[0]);
+  cassetteStatus.textContent='Analisando sinal CAS1:...';
+  const r=await fetch('/api/cassette/upload',{method:'POST',body});
+  const d=await r.json(); renderCassetteStatus(d);
+});
+
+fetch('/api/cassette/status').then(r=>r.json()).then(renderCassetteStatus).catch(()=>{});
 
 document.getElementById('reset').addEventListener('click',async()=>{
   await fetch('/api/reset',{method:'POST'}); transcript='Ok\n'; screen.textContent=transcript; vars.textContent='{}'; svg.innerHTML=''; input.focus();

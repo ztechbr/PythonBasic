@@ -22,6 +22,7 @@ from typing import Any
 
 from app.models.runtime import RuntimeState, BasicError, InputRequired, FileHandle
 from app.services.expression import ExpressionParser
+from app.services import cassette, legacy_basic
 from app.asm_ports import biptrg, next86, bistrs, biprtu
 
 
@@ -40,6 +41,9 @@ class GWBasicInterpreter:
         self.data_dir = Path(data_dir).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.max_steps = int(max_steps)
+        # CAS1: is a mounted audio cassette image. WAV is the lossless default;
+        # MP3 can be mounted/generated when ffmpeg is available.
+        self.cassette_path = self.data_dir / 'cassette.wav'
 
     # ------------------------------------------------------------------
     # Front-door API. Roughly MAIN/STPRDY in GWMAIN.ASM plus SCNEDT input.
@@ -256,6 +260,8 @@ class GWBasicInterpreter:
         if upper == 'TROFF': self.state.trace=False; return None
         if kw(upper,'RANDOMIZE'):
             arg=stmt[9:].strip(); random.seed(self.expr.evaluate(arg) if arg else None); return None
+        if upper.startswith('DEF SEG'):
+            self.cmd_def_seg(stmt[7:].strip()); return None
         if kw(upper,'POKE'): self.cmd_poke(stmt[4:].lstrip()); return None
         if upper.startswith('OUT '): self.cmd_out(stmt[3:].lstrip()); return None
         if upper.startswith('DEFINT') or upper.startswith('DEFSNG') or upper.startswith('DEFDBL') or upper.startswith('DEFSTR'):
@@ -269,6 +275,10 @@ class GWBasicInterpreter:
         if kw(upper,'CLOSE'): self.cmd_close(stmt[5:].lstrip()); return None
         if kw(upper,'KILL'): self.cmd_kill(stmt[4:].lstrip()); return None
         if kw(upper,'NAME'): self.cmd_name(stmt[4:].lstrip()); return None
+        if upper.startswith('MOUNT CAS1'):
+            self.cmd_mount_cassette(stmt[len('MOUNT CAS1'):].lstrip()); return None
+        if kw(upper,'BSAVE'): self.cmd_bsave(stmt[5:].lstrip()); return None
+        if kw(upper,'BLOAD'): self.cmd_bload(stmt[5:].lstrip()); return None
         if kw(upper,'SAVE'): self.cmd_save(stmt[4:].lstrip()); return None
         if kw(upper,'LOAD'): self.cmd_load(stmt[4:].lstrip(), merge=False); return None
         if kw(upper,'MERGE'): self.cmd_load(stmt[5:].lstrip(), merge=True); return None
@@ -545,11 +555,27 @@ class GWBasicInterpreter:
         if len(parts)!=2: raise BasicError('Syntax error')
         a,b=parts; va,vb=self.state.get_var(a),self.state.get_var(b); self.state.set_var(a,vb); self.state.set_var(b,va)
 
+    def cmd_def_seg(self, text):
+        """Port of DEF SEG/SAVSEG used by PEEK, POKE, BLOAD and BSAVE.
+
+        ``DEF SEG=expr`` selects a 16-bit real-mode segment. A bare ``DEF SEG``
+        restores the educational port's default segment 0.
+        """
+        text=text.strip()
+        if not text:
+            self.state.def_seg=0; return
+        if not text.startswith('='):
+            raise BasicError('Syntax error')
+        value=int(self.expr.evaluate(text[1:].strip()))
+        if value < -32768 or value > 65535:
+            raise BasicError('Illegal function call')
+        self.state.def_seg=value & 0xFFFF
+
     def cmd_poke(self,text):
         parts=split_top_level(text, ',')
         if len(parts)!=2: raise BasicError('Syntax error')
-        addr=int(self.expr.evaluate(parts[0])); value=int(self.expr.evaluate(parts[1]))
-        self.state.memory[addr]=value & 0xFF
+        offset=int(self.expr.evaluate(parts[0])); value=int(self.expr.evaluate(parts[1]))
+        self.state.memory[self.state.linear_address(offset)]=value & 0xFF
 
     def cmd_out(self,text):
         parts=split_top_level(text, ',')
@@ -603,18 +629,162 @@ class GWBasicInterpreter:
         if not m: raise BasicError('Syntax error')
         self.safe_path(m.group(1)).rename(self.safe_path(m.group(2)))
 
+    def _filename_and_options(self, text):
+        parts=[p.strip() for p in split_top_level(text, ',')]
+        if not parts or not parts[0]: raise BasicError('Bad file name')
+        try: filename=self.expr.evaluate(parts[0])
+        except BasicError: raise
+        if not isinstance(filename,str): raise BasicError('Type mismatch')
+        return filename, [p.strip().upper() for p in parts[1:] if p.strip()]
+
+    @staticmethod
+    def _cassette_name(filename: str) -> str | None:
+        if filename.upper().startswith('CAS1:'):
+            return filename[5:][:8]
+        return None
+
+    def mount_cassette(self, path: str | os.PathLike) -> Path:
+        path=Path(path).resolve()
+        if path.suffix.lower() not in ('.wav','.mp3'):
+            raise BasicError('Cassette image must be WAV or MP3')
+        self.cassette_path=path
+        return path
+
+    def cmd_mount_cassette(self,text):
+        # Extension command for the web port: MOUNT CAS1,"capture.wav"
+        text=text.lstrip(' ,')
+        if not text: raise BasicError('Syntax error')
+        filename,_=self._filename_and_options(text)
+        self.mount_cassette(self.safe_path(filename))
+        self.state.emit(f'CAS1: mounted {self.cassette_path.name}')
+
+    def _program_payload(self, option: str) -> tuple[int, bytes]:
+        if option == 'A':
+            return cassette.TYPE_ASCII, legacy_basic.ascii_program_bytes(self.state.program)
+        payload=legacy_basic.tokenize_program(self.state.program)
+        if option == 'P':
+            return cassette.TYPE_PROTECTED, legacy_basic.protect_payload(payload)
+        if option:
+            raise BasicError('Syntax error')
+        return cassette.TYPE_TOKENISED, payload
+
     def cmd_save(self,text):
-        path=self.safe_path(text)
-        with open(path,'w',encoding='utf-8') as f:
-            for n in self.sorted_lines(): f.write(f"{n} {self.state.program[n]}\n")
+        filename,options=self._filename_and_options(text)
+        option=options[0] if options else ''
+        file_type,payload=self._program_payload(option)
+        tape_name=self._cassette_name(filename)
+        if tape_name is not None:
+            try:
+                cassette.append_file(self.cassette_path, cassette.TapeFile(tape_name,file_type,payload))
+            except cassette.CassetteError as exc:
+                raise BasicError(str(exc)) from exc
+            self.state.emit(f'{tape_name}.{cassette.TapeFile(tape_name,file_type,b"").type_letter}')
+            return
+
+        path=self.safe_path(filename); path.parent.mkdir(parents=True,exist_ok=True)
+        if file_type == cassette.TYPE_ASCII:
+            path.write_bytes(payload)
+        elif file_type == cassette.TYPE_PROTECTED:
+            # GIODSK uses FE as the protected disk-file marker.
+            path.write_bytes(b'\xFE'+payload+b'\x1A')
+        else:
+            # DSKCOM/GIODSK tokenised disk program marker.
+            path.write_bytes(b'\xFF'+payload)
+
+    def _decode_program_payload(self,file_type: int,payload: bytes) -> dict[int,str]:
+        if file_type == cassette.TYPE_ASCII:
+            return legacy_basic.parse_ascii_program(payload)
+        if file_type in (cassette.TYPE_PROTECTED,0x20):
+            payload=legacy_basic.unprotect_payload(payload)
+        return legacy_basic.detokenize_program(payload)
 
     def cmd_load(self,text,merge=False):
-        path=self.safe_path(text)
-        if not path.exists(): raise BasicError('File not found')
+        filename,options=self._filename_and_options(text)
+        tape_name=self._cassette_name(filename)
+        if tape_name is not None:
+            try:
+                tf=cassette.find_file(self.cassette_path,tape_name,cassette.PROGRAM_TYPES)
+            except cassette.CassetteError as exc:
+                raise BasicError(str(exc)) from exc
+            if not tf.crc_ok: raise BasicError('Device I/O error')
+            if merge and tf.file_type != cassette.TYPE_ASCII:
+                raise BasicError('Bad file mode')
+            program=self._decode_program_payload(tf.file_type,tf.payload)
+            self.state.emit(f'{tf.name}.{tf.type_letter}')
+        else:
+            path=self.safe_path(filename)
+            if not path.exists(): raise BasicError('File not found')
+            raw=path.read_bytes()
+            if raw[:1] == b'\xFF':
+                if merge: raise BasicError('Bad file mode')
+                program=legacy_basic.detokenize_program(raw[1:])
+            elif raw[:1] == b'\xFE':
+                if merge: raise BasicError('Bad file mode')
+                enc=raw[1:-1] if raw.endswith(b'\x1A') else raw[1:]
+                program=legacy_basic.detokenize_program(legacy_basic.unprotect_payload(enc))
+            else:
+                program=legacy_basic.parse_ascii_program(raw)
         if not merge: self.state.program.clear()
-        for line in path.read_text(encoding='utf-8').splitlines():
-            m=re.match(r'^(\d+)\s?(.*)$',line)
-            if m: self.state.program[int(m.group(1))]=m.group(2)
+        self.state.program.update(program)
+        # LOAD filename,R exists historically. In this web port execution remains an
+        # explicit RUN so HTTP command/result boundaries stay deterministic.
+
+    def cmd_bsave(self,text):
+        parts=[p.strip() for p in split_top_level(text, ',')]
+        if len(parts)!=3: raise BasicError('Syntax error')
+        filename=self.expr.evaluate(parts[0])
+        if not isinstance(filename,str): raise BasicError('Type mismatch')
+        offset_raw=int(self.expr.evaluate(parts[1])); length_raw=int(self.expr.evaluate(parts[2]))
+        if not -32768 <= offset_raw <= 0xFFFF or not -32768 <= length_raw <= 0xFFFF:
+            raise BasicError('Overflow')
+        offset=offset_raw & 0xFFFF; length=length_raw & 0xFFFF
+        if length == 0: raise BasicError('Illegal function call')
+        payload=bytes(self.state.memory.get(self.state.linear_address(offset+i),0) for i in range(length))
+        tape_name=self._cassette_name(filename)
+        if tape_name is not None:
+            try:
+                cassette.append_file(self.cassette_path,cassette.TapeFile(
+                    tape_name,cassette.TYPE_MEMORY,payload,self.state.def_seg,offset))
+            except cassette.CassetteError as exc:
+                raise BasicError(str(exc)) from exc
+            self.state.emit(f'{tape_name}.M'); return
+        # GIO86 disk BSAVE header: FD, segment, offset, length, payload.
+        path=self.safe_path(filename); path.parent.mkdir(parents=True,exist_ok=True)
+        header=b'\xFD'+self.state.def_seg.to_bytes(2,'little')+offset.to_bytes(2,'little')+length.to_bytes(2,'little')
+        path.write_bytes(header+payload)
+
+    def cmd_bload(self,text):
+        parts=[p.strip() for p in split_top_level(text, ',')]
+        if not 1 <= len(parts) <= 2: raise BasicError('Syntax error')
+        filename=self.expr.evaluate(parts[0])
+        if not isinstance(filename,str): raise BasicError('Type mismatch')
+        explicit_offset=int(self.expr.evaluate(parts[1])) if len(parts)==2 and parts[1] else None
+        if explicit_offset is not None:
+            if not -32768 <= explicit_offset <= 0xFFFF: raise BasicError('Overflow')
+            explicit_offset &= 0xFFFF
+        tape_name=self._cassette_name(filename)
+        if tape_name is not None:
+            try: tf=cassette.find_file(self.cassette_path,tape_name,{cassette.TYPE_MEMORY})
+            except cassette.CassetteError as exc: raise BasicError(str(exc)) from exc
+            if not tf.crc_ok: raise BasicError('Device I/O error')
+            payload=tf.payload
+            segment=self.state.def_seg if explicit_offset is not None else tf.segment
+            offset=explicit_offset if explicit_offset is not None else tf.offset
+            self.state.emit(f'{tf.name}.M')
+        else:
+            path=self.safe_path(filename)
+            if not path.exists(): raise BasicError('File not found')
+            raw=path.read_bytes()
+            if len(raw)<7 or raw[0] != 0xFD: raise BasicError('Bad file mode')
+            file_segment=int.from_bytes(raw[1:3],'little')
+            file_offset=int.from_bytes(raw[3:5],'little')
+            length=int.from_bytes(raw[5:7],'little')
+            payload=raw[7:7+length]
+            if len(payload) < length: raise BasicError('Input past end')
+            segment=self.state.def_seg if explicit_offset is not None else file_segment
+            offset=explicit_offset if explicit_offset is not None else file_offset
+        for i,value in enumerate(payload):
+            self.state.memory[self.state.linear_address(offset+i,segment)]=value
 
 
     def cmd_common(self,text):

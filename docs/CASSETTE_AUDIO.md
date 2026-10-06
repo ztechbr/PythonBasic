@@ -1,0 +1,164 @@
+# CAS1 cassette audio compatibility
+
+## Scope
+
+This port implements the IBM PC 5150 cassette format used by the Microsoft BASIC family behind Cassette BASIC, Disk BASIC and BASICA. It is deliberately separated from the supplied `GIOCAS.ASM` because that source file contains only the machine-independent `MOTOR` hook and returns `Device unavailable`; the actual physical modulation was provided by IBM PC BIOS cassette services.
+
+The implementation is in:
+
+- `app/services/cassette.py`: FSK waveform, record framing, CRC, WAV/MP3 read/write.
+- `app/services/legacy_basic.py`: tokenised, ASCII and protected BASIC program payloads.
+- `app/services/interpreter.py`: `LOAD`, `SAVE`, `BLOAD`, `BSAVE`, `DEF SEG`, `PEEK`, `POKE` and `CAS1:` routing.
+- `app/controllers/basic_controller.py`: browser upload/download and tape inspection.
+
+## Physical encoding
+
+The IBM BIOS cassette service represents each bit as one complete period:
+
+- bit 1: PIT count 1184, nominally about 1 ms, approximately 1 kHz.
+- bit 0: PIT count 592, nominally about 0.5 ms, approximately 2 kHz.
+- bits within bytes are written most-significant bit first.
+
+The Python WAV writer uses the actual PIT ratio against 1,193,182 Hz and a fractional PCM sample clock. This avoids cumulative timing error when the exact timer period is not an integer number of audio samples.
+
+## Physical record
+
+A record is encoded as:
+
+```text
+256 x FF leader
+0 sync bit
+16h sync byte
+256-byte data block
+2-byte CRC
+[optional additional 256-byte block + CRC pairs]
+FF trailer
+```
+
+The CRC is CRC-16/CCITT with polynomial `0x1021`. The BIOS starts its CRC register at `FFFFh`, writes the one's complement of the result, most-significant byte first, and a correct data+CRC stream leaves the documented remainder `1D0Fh`.
+
+## BASIC cassette header
+
+The first record contains a 256-byte BASIC header:
+
+```text
+A5                 magic
+8 bytes            cassette filename
+1 byte             type
+2 bytes LE         length of following payload
+2 bytes LE         segment
+2 bytes LE         offset
+00                 end of header data
+239 x 01           filler
+```
+
+Supported type bytes:
+
+```text
+00  data
+01  BSAVE memory image
+20  protected BASIC variant
+40  ASCII BASIC
+80  tokenised BASIC
+A0  protected BASIC
+```
+
+Each following 256-byte BASIC data block contains one length byte and 255 payload bytes. A zero length byte means more blocks follow. On the final block, the byte stores the payload count plus one and unused bytes repeat the final payload byte.
+
+## Commands
+
+The web interpreter accepts historical `CAS1:` file specifications:
+
+```basic
+10 PRINT "HELLO FROM TAPE"
+SAVE "CAS1:HELLO"
+NEW
+LOAD "CAS1:HELLO"
+RUN
+```
+
+ASCII program:
+
+```basic
+SAVE "CAS1:SOURCE",A
+LOAD "CAS1:SOURCE"
+```
+
+Protected program:
+
+```basic
+SAVE "CAS1:SECRET",P
+LOAD "CAS1:SECRET"
+```
+
+Memory image:
+
+```basic
+DEF SEG=&H2000
+POKE 100,65
+POKE 101,66
+POKE 102,67
+BSAVE "CAS1:MEM",100,3
+
+DEF SEG=&H2000
+BLOAD "CAS1:MEM"
+PRINT PEEK(100);PEEK(101);PEEK(102)
+```
+
+`DEF SEG`, `PEEK`, `POKE`, `BSAVE` and `BLOAD` share a 20-bit real-mode memory model. Physical address formation is:
+
+```text
+physical = ((segment * 16) + offset) AND FFFFFh
+```
+
+A `BLOAD` with no explicit offset uses the segment and offset stored in the cassette header. When an explicit offset is supplied, the current `DEF SEG` is used.
+
+## Mounting a historical WAV
+
+The browser contains a `Cassete CAS1:` panel. Select a `.wav` or `.mp3` recording and press `Montar WAV/MP3`. The server scans the leader, sync byte, data blocks and CRC and reports files such as:
+
+```text
+HELLO.B  153 bytes  CRC=OK
+IMAGE.M  4096 bytes CRC=OK seg=2000 off=0000
+```
+
+The same can be done by the port-specific terminal extension:
+
+```basic
+MOUNT CAS1,"capture.wav"
+```
+
+After mounting:
+
+```basic
+LOAD "CAS1:HELLO"
+BLOAD "CAS1:IMAGE"
+```
+
+## WAV versus MP3
+
+WAV is the canonical format. A historical analog cassette recording contains timing information in zero crossings and pulse periods, and PCM WAV retains that information without perceptual compression.
+
+MP3 is implemented for convenience and has passed generated round-trip tests at 320 kbps, but it is lossy. An MP3 encoder can alter transitions enough to make a marginal historical cassette fail CRC. For archival material, keep the original WAV and, if storage is a concern, compress the WAV with ZIP rather than transcoding it to MP3.
+
+## Analog-decoder strategy
+
+The reader does not expect a perfect square wave. It:
+
+1. accepts mono or stereo PCM WAV at common sample widths;
+2. averages stereo channels;
+3. removes DC bias;
+4. estimates signal amplitude;
+5. uses hysteretic zero-crossing/rising-edge detection;
+6. classifies periods as 1 or 0 according to the IBM timing;
+7. searches for the long `FF` leader followed by the sync bit and `16h`;
+8. verifies every block with CRC before exposing it to BASIC.
+
+This is intended to read both files generated by this port and WAV captures from real IBM-compatible cassette recordings. Real tapes with severe wow/flutter, clipping, dropout or heavy filtering may need restoration or more adaptive DSP.
+
+## Historical references used for the implementation
+
+- IBM Personal Computer Technical Reference, cassette BIOS services and Data Record Architecture.
+- IBM Personal Computer BASIC Reference, `LOAD`, `SAVE`, `BLOAD`, `BSAVE` and `CAS1:` semantics.
+- PC-BASIC documentation, cassette file header/data-block format and compatibility notes.
+- The original ASM files included in `reference/asm`, especially `GIO86.ASM`, `DSKCOM.ASM`, `GIODSK.ASM`, `GWEVAL.ASM` and the `GIOCAS.ASM` stub.
